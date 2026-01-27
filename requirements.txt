@@ -1,3 +1,4 @@
-requests==2.28.1
 google-genai
-dotenv
+python-dotenv
+pydantic
+notion-client
