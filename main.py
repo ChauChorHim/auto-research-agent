@@ -277,6 +277,9 @@ if __name__ == "__main__":
 
         # Parse response
         digest_data = WeeklyResearchDigest.model_validate_json(response.text)
+        
+        # Force the report date to be today, to avoid LLM hallucinations
+        digest_data.report_date = datetime.now().strftime("%Y-%m-%d")
 
         # Filter items older than DAYS_LOOKBACK
         cutoff_date = datetime.now() - timedelta(days=DAYS_LOOKBACK)
