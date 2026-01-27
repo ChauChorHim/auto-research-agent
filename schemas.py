@@ -37,7 +37,7 @@ class WeeklyResearchDigest(BaseModel):
     topic: str = Field(
         ..., description="The main research topic (e.g., Garment Simulation)."
     )
-    report_date: str = Field(..., description="Date of this report generation.")
+    report_date: str = Field(..., description="Current date.")
     items: List[ResearchItem] = Field(
         ..., description="List of max 10 curated research items, ordered by relevance."
     )

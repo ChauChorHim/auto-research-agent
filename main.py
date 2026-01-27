@@ -1,7 +1,7 @@
 import logging
 import logging.handlers
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import dotenv
@@ -9,7 +9,7 @@ from google import genai
 from google.genai import types
 from notion_client import Client
 
-from research_topic_prompts import garment_simulation_query
+from research_topic_prompts import DAYS_LOOKBACK, garment_simulation_query
 from schemas import WeeklyResearchDigest
 from system_instruction_prompts import weekly_digest_system_instruction
 
@@ -47,6 +47,39 @@ def save_to_notion(digest_data: WeeklyResearchDigest):
             return
 
         notion = Client(auth=notion_token)
+        
+        # Check and prepare properties
+        db_info = notion.databases.retrieve(database_id)
+        existing_properties = db_info.get("properties", {})
+        
+        # Find the title property name (it might not be "Name")
+        title_prop_name = "Name"
+        for prop_name, prop_data in existing_properties.items():
+            if prop_data["type"] == "title":
+                title_prop_name = prop_name
+                break
+        
+        # Check for "Date" property
+        if "Date" not in existing_properties:
+            try:
+                notion.databases.update(
+                    database_id, 
+                    properties={"Date": {"date": {}}}
+                )
+                logger.info("Created 'Date' property in Notion database.")
+            except Exception as e:
+                logger.warning(f"Could not create 'Date' property: {e}")
+
+        # Check for "Topic" property
+        if "Topic" not in existing_properties:
+            try:
+                notion.databases.update(
+                    database_id, 
+                    properties={"Topic": {"rich_text": {}}}
+                )
+                logger.info("Created 'Topic' property in Notion database.")
+            except Exception as e:
+                logger.warning(f"Could not create 'Topic' property: {e}")
 
         # Create blocks for the page content
         children_blocks = []
@@ -126,10 +159,8 @@ def save_to_notion(digest_data: WeeklyResearchDigest):
                         "rich_text": [
                             {
                                 "type": "text",
-                                "text": {
-                                    "content": "Relevance: ",
-                                    "annotations": {"bold": True},
-                                },
+                                "text": {"content": "Relevance: "},
+                                "annotations": {"bold": True},
                             },
                             {
                                 "type": "text",
@@ -149,10 +180,8 @@ def save_to_notion(digest_data: WeeklyResearchDigest):
                         "rich_text": [
                             {
                                 "type": "text",
-                                "text": {
-                                    "content": "Key Innovation: ",
-                                    "annotations": {"bold": True},
-                                },
+                                "text": {"content": "Key Innovation: "},
+                                "annotations": {"bold": True},
                             },
                             {"type": "text", "text": {"content": item.key_innovation}},
                         ]
@@ -179,22 +208,32 @@ def save_to_notion(digest_data: WeeklyResearchDigest):
             )
 
         # Create the page in the database
+        # Construct properties payload dynamically based on what exists
+        page_properties = {
+            title_prop_name: {
+                "title": [
+                    {
+                        "text": {
+                            "content": f"{digest_data.topic} - {digest_data.report_date}"
+                        }
+                    }
+                ]
+            }
+        }
+        
+        # Add Date if it exists (or was created)
+        # We re-check keys or assume success if no error, but safer to check updated schema or just try.
+        # Since we just tried to update, we can attempt to write to them.
+        # If the update failed, this write might fail, but that's acceptable behavior (logs will show).
+        if "Date" in existing_properties or "Date" not in existing_properties: # We tried to add it
+             page_properties["Date"] = {"date": {"start": datetime.now().isoformat()}}
+             
+        if "Topic" in existing_properties or "Topic" not in existing_properties:
+             page_properties["Topic"] = {"rich_text": [{"text": {"content": digest_data.topic}}]}
+
         notion.pages.create(
             parent={"database_id": database_id},
-            properties={
-                "Name": {
-                    "title": [
-                        {
-                            "text": {
-                                "content": f"{digest_data.topic} - {digest_data.report_date}"
-                            }
-                        }
-                    ]
-                },
-                "Date": {"date": {"start": datetime.now().isoformat()}},
-                # You can add more properties here if your DB has columns like "Status", "Topic", etc.
-                "Topic": {"rich_text": [{"text": {"content": digest_data.topic}}]},
-            },
+            properties=page_properties,
             children=children_blocks,
         )
 
@@ -208,6 +247,11 @@ def save_to_notion(digest_data: WeeklyResearchDigest):
 
 if __name__ == "__main__":
     logger.info("==================================================")
+    logger.info("==================================================")
+    logger.info("==================================================")
+    logger.info("==================================================")
+    logger.info("==================================================")
+    logger.info("==================================================")
     logger.info("Starting GenAI Research Agent")
 
     client = genai.Client(api_key=GEMINI_API_KEY)
@@ -220,7 +264,7 @@ if __name__ == "__main__":
 
     try:
         response = client.models.generate_content(
-            model="gemini-2.0-flash-exp",
+            model="gemini-3-pro-preview",
             contents=query,
             config=types.GenerateContentConfig(
                 system_instruction=system_instruction,
@@ -233,6 +277,30 @@ if __name__ == "__main__":
 
         # Parse response
         digest_data = WeeklyResearchDigest.model_validate_json(response.text)
+
+        # Filter items older than DAYS_LOOKBACK
+        cutoff_date = datetime.now() - timedelta(days=DAYS_LOOKBACK)
+        filtered_items = []
+        for item in digest_data.items:
+            try:
+                # Try to parse YYYY-MM-DD
+                pub_date = datetime.strptime(item.publication_date, "%Y-%m-%d")
+                if pub_date >= cutoff_date:
+                    filtered_items.append(item)
+                else:
+                    logger.info(
+                        f"Skipping old item: {item.title} ({item.publication_date})"
+                    )
+            except ValueError:
+                # If date format is wrong, keep it but warn (or skip? User said strict.)
+                # Let's assume strict format YYYY-MM-DD as per schema.
+                logger.warning(
+                    f"Invalid date format for item: {item.title} ({item.publication_date}). Keeping it."
+                )
+                filtered_items.append(item)
+
+        digest_data.items = filtered_items
+        logger.info(f"Filtered {len(digest_data.items)} items for the report.")
 
         # Create filenames
         date_str = datetime.now().strftime("%Y-%m-%d")

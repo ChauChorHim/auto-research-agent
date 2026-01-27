@@ -1,6 +1,11 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
-today_date = datetime.now().strftime("%Y-%m-%d")
+DAYS_LOOKBACK = 30
+today_date_obj = datetime.now()
+start_date_obj = today_date_obj - timedelta(days=DAYS_LOOKBACK)
+
+today_date = today_date_obj.strftime("%Y-%m-%d")
+start_date = start_date_obj.strftime("%Y-%m-%d")
 
 garment_simulation_query = f"""
 # Research Directive: Garment Simulation & Computational Fashion
@@ -8,8 +13,7 @@ garment_simulation_query = f"""
 **Objective:** Conduct a targeted research sweep for the latest advancements in computer graphics, computational physics, and programmatic design related to simulating clothing on virtual human avatars.
 
 ## 1. Constraints & Scope (Strict Adherence Required)
-*   **Current Date:** {today_date}
-*   **Timeframe:** Focus **STRICTLY** on research, codebases, and technical articles published or released in the **LAST 1 MONTH** relative to the Current Date.
+*   **Timeframe:** Focus **STRICTLY** on research, codebases, and technical articles published or released between **{start_date}** and **{today_date}**.
 *   **Quantity:** Curate a maximum of **10 distinct items**.
 *   **Ranking:** Order items by direct relevance to the *Target Research Domains* below (most impactful first).
 *   **Context:** Do not include older research unless absolutely necessary for foundational context (clearly labeled as "Background").
