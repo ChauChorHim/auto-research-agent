@@ -7,6 +7,7 @@ from pathlib import Path
 import dotenv
 from google import genai
 from google.genai import types
+from notion_client import Client
 
 from research_topic_prompts import DAYS_LOOKBACK, garment_simulation_query
 from schemas import WeeklyResearchDigest
@@ -15,16 +16,8 @@ from system_instruction_prompts import weekly_digest_system_instruction
 dotenv.load_dotenv()
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-logger_file_handler = logging.handlers.RotatingFileHandler(
-    "status.log",
-    maxBytes=1024 * 1024,
-    backupCount=1,
-    encoding="utf8",
-)
-formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-logger_file_handler.setFormatter(formatter)
-logger.addHandler(logger_file_handler)
+# logger_file_handler removed in favor of in-memory capture
+
 
 try:
     GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
@@ -34,12 +27,222 @@ except KeyError:
     raise ValueError
 
 
-def save_to_notion(digest_data: WeeklyResearchDigest):
-    """Saves the digest data to a Notion Database."""
-    pass
+def save_to_notion(digest_data: WeeklyResearchDigest, logs: str = ""):
+    """Saves the digest data to a Notion Page (creating a sub-page)."""
+    try:
+        notion_token = os.environ.get("NOTION_API_KEY")
+        # Use NOTION_PAGE_ID if set, otherwise fallback to NOTION_DATABASE_ID but treat it as a page parent
+        parent_page_id = os.environ.get("NOTION_PAGE_ID") or os.environ.get(
+            "NOTION_DATABASE_ID"
+        )
+
+        if not notion_token or not parent_page_id:
+            logger.warning(
+                "Notion credentials (NOTION_API_KEY or NOTION_PAGE_ID) not found. Skipping Notion save."
+            )
+            print("Skipping Notion save (credentials missing).")
+            return
+
+        notion = Client(auth=notion_token)
+
+        # Create blocks for the page content
+        children_blocks = []
+
+        # Add Intro/Metadata
+        children_blocks.append(
+            {
+                "object": "block",
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": [
+                        {
+                            "type": "text",
+                            "text": {
+                                "content": f"Generated on {digest_data.report_date}"
+                            },
+                            "annotations": {"italic": True},
+                        }
+                    ]
+                },
+            }
+        )
+
+        children_blocks.append({"object": "block", "type": "divider", "divider": {}})
+
+        # Add Items
+        for i, item in enumerate(digest_data.items, 1):
+            # Heading with Link
+            children_blocks.append(
+                {
+                    "object": "block",
+                    "type": "heading_2",
+                    "heading_2": {
+                        "rich_text": [
+                            {
+                                "type": "text",
+                                "text": {"content": f"{i}. "},
+                            },
+                            {
+                                "type": "text",
+                                "text": {"content": item.title},
+                                "text": {
+                                    "content": item.title,
+                                    "link": {"url": item.source_link},
+                                },
+                            },
+                        ]
+                    },
+                }
+            )
+
+            # Domain Tag
+            children_blocks.append(
+                {
+                    "object": "block",
+                    "type": "callout",
+                    "callout": {
+                        "rich_text": [
+                            {
+                                "type": "text",
+                                "text": {
+                                    "content": f"Domain: {item.primary_domain.value}"
+                                },
+                            }
+                        ],
+                        "icon": {"emoji": "🏷️"},
+                    },
+                }
+            )
+
+            # Details: Relevance
+            children_blocks.append(
+                {
+                    "object": "block",
+                    "type": "paragraph",
+                    "paragraph": {
+                        "rich_text": [
+                            {
+                                "type": "text",
+                                "text": {"content": "Relevance: "},
+                                "annotations": {"bold": True},
+                            },
+                            {
+                                "type": "text",
+                                "text": {"content": item.relevance_explanation},
+                            },
+                        ]
+                    },
+                }
+            )
+
+            # Details: Innovation
+            children_blocks.append(
+                {
+                    "object": "block",
+                    "type": "paragraph",
+                    "paragraph": {
+                        "rich_text": [
+                            {
+                                "type": "text",
+                                "text": {"content": "Key Innovation: "},
+                                "annotations": {"bold": True},
+                            },
+                            {"type": "text", "text": {"content": item.key_innovation}},
+                        ]
+                    },
+                }
+            )
+
+            # Summary
+            children_blocks.append(
+                {
+                    "object": "block",
+                    "type": "quote",
+                    "quote": {
+                        "rich_text": [
+                            {"type": "text", "text": {"content": item.summary}}
+                        ]
+                    },
+                }
+            )
+
+            # Spacer
+            children_blocks.append(
+                {"object": "block", "type": "divider", "divider": {}}
+            )
+
+        # Add Logs if present
+        if logs:
+            children_blocks.append(
+                {
+                    "object": "block",
+                    "type": "toggle",
+                    "toggle": {
+                        "rich_text": [
+                            {"type": "text", "text": {"content": "Execution Logs"}}
+                        ],
+                        "children": [
+                            {
+                                "object": "block",
+                                "type": "code",
+                                "code": {
+                                    "rich_text": [
+                                        {"type": "text", "text": {"content": logs}}
+                                    ],
+                                    "language": "plain_text",
+                                },
+                            }
+                        ],
+                    },
+                }
+            )
+
+        # Create the page
+        # Note: When creating a page under a parent PAGE, properties only contains 'title'.
+        logger.info(f"Creating child page under parent ID: {parent_page_id}")
+        notion.pages.create(
+            parent={"page_id": parent_page_id},
+            properties={
+                "title": [
+                    {
+                        "text": {
+                            "content": f"{digest_data.topic} - {digest_data.report_date}"
+                        }
+                    }
+                ]
+            },
+            children=children_blocks,
+        )
+
+        logger.info("Successfully saved report to Notion!")
+        print("Successfully saved report to Notion!")
+
+    except Exception as e:
+        logger.error(f"Failed to save to Notion: {e}")
+        print(f"Failed to save to Notion: {e}")
 
 
 if __name__ == "__main__":
+    # Setup Logger
+    logger.setLevel(logging.INFO)
+
+    # Capture logs to a string buffer
+    import io
+
+    log_stream = io.StringIO()
+    capture_handler = logging.StreamHandler(log_stream)
+    capture_handler.setFormatter(
+        logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    )
+    logger.addHandler(capture_handler)
+
+    # Console output
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(
+        logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    )
+    logger.addHandler(console_handler)
+
     logger.info(
         "Starting GenAI Research Agent"
         "\n=================================================="
@@ -126,9 +329,17 @@ if __name__ == "__main__":
             md_content += f"{item.summary}\n\n"
             md_content += "---\n\n"
 
+        # Append logs to Markdown
+        log_contents = log_stream.getvalue()
+        md_content += "\n\n# Execution Logs\n\n```text\n" + log_contents + "\n```"
+
+        # Save to Notion with logs
+        save_to_notion(digest_data, logs=log_contents)
+
+        # Re-save Markdown with logs
         with open(md_path, "w", encoding="utf-8") as f:
             f.write(md_content)
-        logger.info(f"Saved Markdown report to {md_path}")
+        logger.info(f"Updated Markdown report with logs at {md_path}")
 
         print(f"Report generated successfully!\nMarkdown: {md_path}\nJSON: {json_path}")
 
