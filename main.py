@@ -171,8 +171,15 @@ def save_to_notion(digest_data: WeeklyResearchDigest, logs: str = ""):
                 {"object": "block", "type": "divider", "divider": {}}
             )
 
-        # Add Logs if present
+        # Add Logs if present (truncated to max 2000 chars for Notion block limit)
         if logs:
+            # Take the last 2000 characters to keep the most relevant recent logs
+            truncated_logs = logs[-2000:]
+            if len(logs) > 2000:
+                truncated_logs = "...[Logs truncated]...\n" + truncated_logs
+                # Ensure we are still under limit after adding prefix
+                truncated_logs = truncated_logs[-2000:]
+
             children_blocks.append(
                 {
                     "object": "block",
@@ -187,9 +194,12 @@ def save_to_notion(digest_data: WeeklyResearchDigest, logs: str = ""):
                                 "type": "code",
                                 "code": {
                                     "rich_text": [
-                                        {"type": "text", "text": {"content": logs}}
+                                        {
+                                            "type": "text",
+                                            "text": {"content": truncated_logs},
+                                        }
                                     ],
-                                    "language": "plain_text",
+                                    "language": "plain text",
                                 },
                             }
                         ],
@@ -316,32 +326,11 @@ if __name__ == "__main__":
             f.write(digest_data.model_dump_json(indent=2))
         logger.info(f"Saved JSON report to {json_path}")
 
-        # Generate and Save Markdown
-        md_content = f"# {digest_data.topic}\n"
-        md_content += f"**Date:** {digest_data.report_date}\n\n"
-        md_content += "---\n\n"
-
-        for i, item in enumerate(digest_data.items, 1):
-            md_content += f"## {i}. [{item.title}]({item.source_link})\n"
-            md_content += f"**Domain:** {item.primary_domain.value}\n\n"
-            md_content += f"**Relevance:** {item.relevance_explanation}\n\n"
-            md_content += f"**Key Innovation:** {item.key_innovation}\n\n"
-            md_content += f"{item.summary}\n\n"
-            md_content += "---\n\n"
-
         # Append logs to Markdown
         log_contents = log_stream.getvalue()
-        md_content += "\n\n# Execution Logs\n\n```text\n" + log_contents + "\n```"
 
         # Save to Notion with logs
         save_to_notion(digest_data, logs=log_contents)
-
-        # Re-save Markdown with logs
-        with open(md_path, "w", encoding="utf-8") as f:
-            f.write(md_content)
-        logger.info(f"Updated Markdown report with logs at {md_path}")
-
-        print(f"Report generated successfully!\nMarkdown: {md_path}\nJSON: {json_path}")
 
     except Exception as e:
         logger.error(f"Error generating content: {e}")
