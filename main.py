@@ -171,14 +171,29 @@ def save_to_notion(digest_data: WeeklyResearchDigest, logs: str = ""):
                 {"object": "block", "type": "divider", "divider": {}}
             )
 
-        # Add Logs if present (truncated to max 2000 chars for Notion block limit)
+        # Add Logs if present (split into multiple blocks if needed)
         if logs:
-            # Take the last 2000 characters to keep the most relevant recent logs
-            truncated_logs = logs[-2000:]
-            if len(logs) > 2000:
-                truncated_logs = "...[Logs truncated]...\n" + truncated_logs
-                # Ensure we are still under limit after adding prefix
-                truncated_logs = truncated_logs[-2000:]
+            # Split logs into chunks of 2000 characters (Notion block limit)
+            chunk_size = 2000
+            log_chunks = [logs[i : i + chunk_size] for i in range(0, len(logs), chunk_size)]
+
+            log_children_blocks = []
+            for chunk in log_chunks:
+                log_children_blocks.append(
+                    {
+                        "object": "block",
+                        "type": "code",
+                        "code": {
+                            "rich_text": [
+                                {
+                                    "type": "text",
+                                    "text": {"content": chunk},
+                                }
+                            ],
+                            "language": "plain text",
+                        },
+                    }
+                )
 
             children_blocks.append(
                 {
@@ -188,21 +203,7 @@ def save_to_notion(digest_data: WeeklyResearchDigest, logs: str = ""):
                         "rich_text": [
                             {"type": "text", "text": {"content": "Execution Logs"}}
                         ],
-                        "children": [
-                            {
-                                "object": "block",
-                                "type": "code",
-                                "code": {
-                                    "rich_text": [
-                                        {
-                                            "type": "text",
-                                            "text": {"content": truncated_logs},
-                                        }
-                                    ],
-                                    "language": "plain text",
-                                },
-                            }
-                        ],
+                        "children": log_children_blocks,
                     },
                 }
             )
