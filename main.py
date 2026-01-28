@@ -311,26 +311,11 @@ if __name__ == "__main__":
         digest_data.items = filtered_items
         logger.info(f"Filtered {len(digest_data.items)} items for the report.")
 
-        # Create filenames
-        date_str = datetime.now().strftime("%Y-%m-%d")
-        safe_topic = digest_data.topic.lower().replace(" ", "_").replace("&", "and")
-        base_filename = f"{date_str}_{safe_topic}"
-        report_dir = Path("saved_reports")
-        report_dir.mkdir(exist_ok=True)
-
-        json_path = report_dir / f"{base_filename}.json"
-        md_path = report_dir / f"{base_filename}.md"
-
-        # Save JSON
-        with open(json_path, "w", encoding="utf-8") as f:
-            f.write(digest_data.model_dump_json(indent=2))
-        logger.info(f"Saved JSON report to {json_path}")
-
-        # Append logs to Markdown
-        log_contents = log_stream.getvalue()
-
         # Save to Notion with logs
+        log_contents = log_stream.getvalue()
         save_to_notion(digest_data, logs=log_contents)
+        
+        logger.info("Report saved to Notion.")
 
     except Exception as e:
         logger.error(f"Error generating content: {e}")
