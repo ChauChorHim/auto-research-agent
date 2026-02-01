@@ -1,0 +1,24 @@
+[project]
+name = "auto-research-agent"
+version = "0.1.0"
+description = "A Python-based autonomous agent designed to conduct weekly research on specific technical topics and publish a digest to Notion."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    {name = "ChauChorHim"}
+]
+dependencies = [
+    "google-genai",
+    "python-dotenv",
+    "pydantic",
+    "notion-client",
+    "swarms",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["auto_research_agent*"]
