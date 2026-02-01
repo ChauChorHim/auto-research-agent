@@ -1,17 +1,20 @@
 import logging
-import logging.handlers
 import os
 from datetime import datetime, timedelta
-from pathlib import Path
 
 import dotenv
 from google import genai
 from google.genai import types
 from notion_client import Client
 
-from research_topic_prompts import DAYS_LOOKBACK, garment_simulation_query
-from schemas import WeeklyResearchDigest
-from system_instruction_prompts import weekly_digest_system_instruction
+from auto_research_agent.prompts.research_topic_prompts import (
+    DAYS_LOOKBACK,
+    garment_simulation_query,
+)
+from auto_research_agent.prompts.system_instruction_prompts import (
+    weekly_digest_system_instruction,
+)
+from auto_research_agent.src.schemas import WeeklyResearchDigest
 
 dotenv.load_dotenv()
 
@@ -175,7 +178,9 @@ def save_to_notion(digest_data: WeeklyResearchDigest, logs: str = ""):
         if logs:
             # Split logs into chunks of 2000 characters (Notion block limit)
             chunk_size = 2000
-            log_chunks = [logs[i : i + chunk_size] for i in range(0, len(logs), chunk_size)]
+            log_chunks = [
+                logs[i : i + chunk_size] for i in range(0, len(logs), chunk_size)
+            ]
 
             log_children_blocks = []
             for chunk in log_chunks:
@@ -315,7 +320,7 @@ if __name__ == "__main__":
         # Save to Notion with logs
         log_contents = log_stream.getvalue()
         save_to_notion(digest_data, logs=log_contents)
-        
+
         logger.info("Report saved to Notion.")
 
     except Exception as e:
