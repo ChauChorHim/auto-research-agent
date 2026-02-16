@@ -13,6 +13,8 @@ dependencies = [
     "pydantic",
     "notion-client",
     "swarms",
+    "google-api-python-client",
+    "google-auth",
 ]
 
 [build-system]
