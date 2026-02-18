@@ -1,249 +1,40 @@
+import argparse
+import io
 import logging
-import os
-from datetime import datetime, timedelta
+import sys
 
 import dotenv
-from google import genai
-from google.genai import types
-from notion_client import Client
 
-from auto_research_agent.prompts.research_topic_prompts import (
-    DAYS_LOOKBACK,
-    garment_simulation_query,
-)
-from auto_research_agent.prompts.system_instruction_prompts import (
-    weekly_digest_system_instruction,
-)
-from auto_research_agent.src.schemas import WeeklyResearchDigest
+from auto_research_agent.src.chat_utils import send_to_google_chat
+from auto_research_agent.src.notion_utils import save_to_notion
+from auto_research_agent.tasks.garment_code_related import GarmentResearchTask
 
 dotenv.load_dotenv()
 
-logger = logging.getLogger(__name__)
-# logger_file_handler removed in favor of in-memory capture
+# Define available tasks
+TASKS = {
+    "garment_research": GarmentResearchTask,
+}
 
 
-try:
-    GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
-except KeyError:
-    GEMINI_API_KEY = "Token not available!"
-    logger.info("GEMINI_API_KEY not available!")
-    raise ValueError
+def main():
+    parser = argparse.ArgumentParser(description="Run research tasks.")
+    parser.add_argument(
+        "task",
+        nargs="?",
+        default="garment_research",
+        choices=TASKS.keys(),
+        help="Name of the task to run (default: garment_research)",
+    )
+    args = parser.parse_args()
 
-
-def save_to_notion(digest_data: WeeklyResearchDigest, logs: str = ""):
-    """Saves the digest data to a Notion Page (creating a sub-page)."""
-    try:
-        notion_token = os.environ.get("NOTION_API_KEY")
-        # Use NOTION_PAGE_ID if set, otherwise fallback to NOTION_DATABASE_ID but treat it as a page parent
-        parent_page_id = os.environ.get("NOTION_PAGE_ID") or os.environ.get(
-            "NOTION_DATABASE_ID"
-        )
-
-        if not notion_token or not parent_page_id:
-            logger.warning(
-                "Notion credentials (NOTION_API_KEY or NOTION_PAGE_ID) not found. Skipping Notion save."
-            )
-            print("Skipping Notion save (credentials missing).")
-            return
-
-        notion = Client(auth=notion_token)
-
-        # Create blocks for the page content
-        children_blocks = []
-
-        # Add Intro/Metadata
-        children_blocks.append(
-            {
-                "object": "block",
-                "type": "paragraph",
-                "paragraph": {
-                    "rich_text": [
-                        {
-                            "type": "text",
-                            "text": {
-                                "content": f"Generated on {digest_data.report_date}"
-                            },
-                            "annotations": {"italic": True},
-                        }
-                    ]
-                },
-            }
-        )
-
-        children_blocks.append({"object": "block", "type": "divider", "divider": {}})
-
-        # Add Items
-        for i, item in enumerate(digest_data.items, 1):
-            # Heading with Link
-            children_blocks.append(
-                {
-                    "object": "block",
-                    "type": "heading_2",
-                    "heading_2": {
-                        "rich_text": [
-                            {
-                                "type": "text",
-                                "text": {"content": f"{i}. "},
-                            },
-                            {
-                                "type": "text",
-                                "text": {"content": item.title},
-                                "text": {
-                                    "content": item.title,
-                                    "link": {"url": item.source_link},
-                                },
-                            },
-                        ]
-                    },
-                }
-            )
-
-            # Domain Tag
-            children_blocks.append(
-                {
-                    "object": "block",
-                    "type": "callout",
-                    "callout": {
-                        "rich_text": [
-                            {
-                                "type": "text",
-                                "text": {
-                                    "content": f"Domain: {item.primary_domain.value}"
-                                },
-                            }
-                        ],
-                        "icon": {"emoji": "🏷️"},
-                    },
-                }
-            )
-
-            # Details: Relevance
-            children_blocks.append(
-                {
-                    "object": "block",
-                    "type": "paragraph",
-                    "paragraph": {
-                        "rich_text": [
-                            {
-                                "type": "text",
-                                "text": {"content": "Relevance: "},
-                                "annotations": {"bold": True},
-                            },
-                            {
-                                "type": "text",
-                                "text": {"content": item.relevance_explanation},
-                            },
-                        ]
-                    },
-                }
-            )
-
-            # Details: Innovation
-            children_blocks.append(
-                {
-                    "object": "block",
-                    "type": "paragraph",
-                    "paragraph": {
-                        "rich_text": [
-                            {
-                                "type": "text",
-                                "text": {"content": "Key Innovation: "},
-                                "annotations": {"bold": True},
-                            },
-                            {"type": "text", "text": {"content": item.key_innovation}},
-                        ]
-                    },
-                }
-            )
-
-            # Summary
-            children_blocks.append(
-                {
-                    "object": "block",
-                    "type": "quote",
-                    "quote": {
-                        "rich_text": [
-                            {"type": "text", "text": {"content": item.summary}}
-                        ]
-                    },
-                }
-            )
-
-            # Spacer
-            children_blocks.append(
-                {"object": "block", "type": "divider", "divider": {}}
-            )
-
-        # Add Logs if present (split into multiple blocks if needed)
-        if logs:
-            # Split logs into chunks of 2000 characters (Notion block limit)
-            chunk_size = 2000
-            log_chunks = [
-                logs[i : i + chunk_size] for i in range(0, len(logs), chunk_size)
-            ]
-
-            log_children_blocks = []
-            for chunk in log_chunks:
-                log_children_blocks.append(
-                    {
-                        "object": "block",
-                        "type": "code",
-                        "code": {
-                            "rich_text": [
-                                {
-                                    "type": "text",
-                                    "text": {"content": chunk},
-                                }
-                            ],
-                            "language": "plain text",
-                        },
-                    }
-                )
-
-            children_blocks.append(
-                {
-                    "object": "block",
-                    "type": "toggle",
-                    "toggle": {
-                        "rich_text": [
-                            {"type": "text", "text": {"content": "Execution Logs"}}
-                        ],
-                        "children": log_children_blocks,
-                    },
-                }
-            )
-
-        # Create the page
-        # Note: When creating a page under a parent PAGE, properties only contains 'title'.
-        logger.info(f"Creating child page under parent ID: {parent_page_id}")
-        notion.pages.create(
-            parent={"page_id": parent_page_id},
-            properties={
-                "title": [
-                    {
-                        "text": {
-                            "content": f"{digest_data.topic} - {digest_data.report_date}"
-                        }
-                    }
-                ]
-            },
-            children=children_blocks,
-        )
-
-        logger.info("Successfully saved report to Notion!")
-        print("Successfully saved report to Notion!")
-
-    except Exception as e:
-        logger.error(f"Failed to save to Notion: {e}")
-        print(f"Failed to save to Notion: {e}")
-
-
-if __name__ == "__main__":
-    # Setup Logger
+    # Setup Logging
+    logger = logging.getLogger()
     logger.setLevel(logging.INFO)
 
-    # Capture logs to a string buffer
-    import io
+    # Clear existing handlers if any to avoid duplicates
+    if logger.handlers:
+        logger.handlers.clear()
 
     log_stream = io.StringIO()
     capture_handler = logging.StreamHandler(log_stream)
@@ -252,8 +43,7 @@ if __name__ == "__main__":
     )
     logger.addHandler(capture_handler)
 
-    # Console output
-    console_handler = logging.StreamHandler()
+    console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(
         logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     )
@@ -262,67 +52,40 @@ if __name__ == "__main__":
     logger.info(
         "Starting GenAI Research Agent"
         "\n=================================================="
-        "\n=================================================="
-        "\n=================================================="
     )
-    client = genai.Client(api_key=GEMINI_API_KEY)
 
-    # Use the specific garment simulation query
-    query = garment_simulation_query
-    system_instruction = weekly_digest_system_instruction
-
-    logger.info(f"Running query: {query}")
+    task_class = TASKS.get(args.task)
+    if not task_class:
+        logger.error(
+            f"Task '{args.task}' not found. Available tasks: {list(TASKS.keys())}"
+        )
+        return
 
     try:
-        response = client.models.generate_content(
-            model="gemini-3-pro-preview",
-            contents=query,
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                response_mime_type="application/json",
-                response_schema=WeeklyResearchDigest,
-                tools=[types.Tool(google_search=types.GoogleSearch())],
-            ),
-        )
+        logger.info(f"Initializing task: {args.task}")
+        task = task_class()
 
-        logger.info("Response received")
+        logger.info("Executing task...")
+        digest_data = task.run()
 
-        # Parse response
-        digest_data = WeeklyResearchDigest.model_validate_json(response.text)
+        if digest_data:
+            logger.info("Task execution successful. Saving results...")
 
-        # Force the report date to be today, to avoid LLM hallucinations
-        digest_data.report_date = datetime.now().strftime("%Y-%m-%d")
+            # Save to Notion with logs
+            log_contents = log_stream.getvalue()
+            save_to_notion(digest_data, logs=log_contents)
 
-        # Filter items older than DAYS_LOOKBACK
-        cutoff_date = datetime.now() - timedelta(days=DAYS_LOOKBACK)
-        filtered_items = []
-        for item in digest_data.items:
-            try:
-                # Try to parse YYYY-MM-DD
-                pub_date = datetime.strptime(item.publication_date, "%Y-%m-%d")
-                if pub_date >= cutoff_date:
-                    filtered_items.append(item)
-                else:
-                    logger.info(
-                        f"Skipping old item: {item.title} ({item.publication_date})"
-                    )
-            except ValueError:
-                # If date format is wrong, keep it but warn (or skip? User said strict.)
-                # Let's assume strict format YYYY-MM-DD as per schema.
-                logger.warning(
-                    f"Invalid date format for item: {item.title} ({item.publication_date}). Keeping it."
-                )
-                filtered_items.append(item)
+            # Send to Google Chat
+            send_to_google_chat(digest_data)
 
-        digest_data.items = filtered_items
-        logger.info(f"Filtered {len(digest_data.items)} items for the report.")
-
-        # Save to Notion with logs
-        log_contents = log_stream.getvalue()
-        save_to_notion(digest_data, logs=log_contents)
-
-        logger.info("Report saved to Notion.")
+            logger.info("All operations completed successfully.")
+        else:
+            logger.warning("Task executed but returned no data.")
 
     except Exception as e:
-        logger.error(f"Error generating content: {e}")
-        print(f"Error: {e}")
+        logger.error(f"Task failed with error: {e}")
+        # Could implement error notification here
+
+
+if __name__ == "__main__":
+    main()
